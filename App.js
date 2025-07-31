@@ -9,6 +9,33 @@ import AppNavigator from './navigation/AppNavigator';
 // ─── Add expo-speech import ───
 import * as Speech from 'expo-speech';
 
+// ✅ Deep linking configuration for React Navigation
+const linking = {
+  prefixes: [
+    'http://localhost:8081', // Your development server
+    'https://yourapp.com',   // Production URL
+    'superengineer://',      // Custom scheme for native
+  ],
+  config: {
+    screens: {
+      Home: '',
+      Login: 'login',
+      Signup: 'signup', 
+      Pricing: 'pricing',
+      // ✅ This is the key - map payment-success URL to PaymentSuccess screen
+      PaymentSuccess: {
+        path: 'payment-success',
+        parse: {
+          session_id: (session_id) => session_id,
+        },
+      },
+      Chat: 'chat',
+      Settings: 'settings',
+    },
+  },
+};
+
+
 export default function App() {
   // ─── Speak a welcome message when the app loads ───
   useEffect(() => {
@@ -21,7 +48,7 @@ export default function App() {
 
   return (
     <>
-      <NavigationContainer>
+      <NavigationContainer linking={linking}>
         <AppNavigator />
       </NavigationContainer>
       <Toast />

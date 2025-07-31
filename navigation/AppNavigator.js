@@ -25,6 +25,7 @@ import SuperShare          from '../components/SuperShare';
 
 import ProtectedRoute      from '../components/ProtectedRoute';
 import AdminRoute          from '../components/AdminRoute';
+import PaymentSuccessScreen from '../screens/PaymentSuccess';
 
 // Mobile-only brain screens
 let WriteTips, UploadPhoto, UploadManuals, UploadFile;
@@ -130,6 +131,7 @@ function NavigatorInner() {
   const selfHandledScreens = [
     'Home',
     'Pricing',
+    'PaymentSuccess', // ✅ Add this
     'Setup2FA',
     'TwoFactor',
     'Chat',
@@ -195,6 +197,16 @@ function NavigatorInner() {
         component={PricingScreen}
         options={{ headerShown: false }}
       />
+
+      <Stack.Screen 
+        name="PaymentSuccess"
+        component={PaymentSuccessScreen}
+        options={{
+          headerShown: false,
+          gestureEnabled:false
+        }}
+      />
+
       <Stack.Screen name="Setup2FA" component={Setup2FAPage} />
       <Stack.Screen name="TwoFactor" component={TwoFactorPage} />
 

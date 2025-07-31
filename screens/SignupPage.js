@@ -31,6 +31,7 @@ import { Svg, Path } from 'react-native-svg';
 
 console.log('🚀 SignupPage rendered');
 
+const BACKEND_URL= "http://localhost:8000"
 export default function SignupPage() {
   const [formData, setFormData] = useState({
     name: '',
@@ -65,7 +66,7 @@ export default function SignupPage() {
     setIsLoading(true);
     setTimeout(async () => {
       try {
-        const response = await fetch(`${process.env.BACKEND_URL}/auth/signup`,{
+        const response = await fetch(`${BACKEND_URL}/auth/signup`,{
           method:'POST',
           headers:{
             'Content-Type': 'application/json',

@@ -55,6 +55,8 @@ import SubscriptionModal from '../components/SubscriptionModal';
 import PersonalizationSection from '../components/PersonalizationSection';
 import PaymentMethodsSection from '../components/BillingHistorySection';
 import BillingHistorySection from '../components/PaymentMethodsSection';
+import {userSettingsAPI} from '../services/userSettingsApi';
+
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const SIDEBAR_WIDTH = 280;
@@ -81,6 +83,9 @@ const MOBILE_SETTINGS = [
 
 export default function SettingsPage({ route }) {
   const navigation = useNavigation();
+  const [isLoading, setIsLoading] = useState(true);
+const [isSaving, setIsSaving] = useState(false);
+
 
   // ─── State ────────────────────────────────────────────────────────────────
   const [active, setActive] = useState(route?.params?.initialSection || 'general');
@@ -109,130 +114,296 @@ export default function SettingsPage({ route }) {
 
   const [paymentMethods, setPaymentMethods] = useState([]);
 
-  // ─── Load stored values ─────────────────────────────────────────────────
-  useEffect(() => {
-    (async () => {
-      try {
-        const data = await AsyncStorage.multiGet([
-          'userFullName',
-          'userEmail',
-          'userPhoneNumber',
-          'userNickName',
-          'userProfession',
-          'userIndustry',
-          'userLanguage',
-          'userTheme',
-          'emailNotifications',
-          'pushNotifications',
-          'marketingEmails',
-          'speLevel',
-          'speTone',
-          'speResponse',
-          'has2FA',
-          'userPlan',
-          'userAvatar',
-          'paymentMethods',
-        ]);
-        const lookup = Object.fromEntries(data);
-        
-        const savedCustomAvatar = await AsyncStorage.getItem('customAvatarUri');
-        
-        setSettings(prev => ({
-          ...prev,
-          fullName: lookup.userFullName ?? prev.fullName,
-          email: lookup.userEmail ?? prev.email,
-          phoneNumber: lookup.userPhoneNumber ?? prev.phoneNumber,
-          nickName: lookup.userNickName ?? prev.nickName,
-          profession: lookup.userProfession ?? prev.profession,
-          industry: lookup.userIndustry ?? prev.industry,
-          language: lookup.userLanguage ?? prev.language,
-          theme: lookup.userTheme ?? prev.theme,
-          emailNotifications: lookup.emailNotifications === 'true' || lookup.emailNotifications === null ? true : false,
-          pushNotifications: lookup.pushNotifications === 'true',
-          marketingEmails: lookup.marketingEmails === 'true',
-          speLevel: lookup.speLevel ?? prev.speLevel,
-          speTone: lookup.speTone ?? prev.speTone,
-          speResponse: lookup.speResponse ?? prev.speResponse,
-          twoFactorAuth: lookup.has2FA === 'true',
-          selectedAvatar: lookup.userAvatar ?? prev.selectedAvatar,
-          customAvatarUri: savedCustomAvatar,
-        }));
-        setCurrentPlan(lookup.userPlan || 'free');
-        
-        // Load payment methods
-        if (lookup.paymentMethods) {
-          setPaymentMethods(JSON.parse(lookup.paymentMethods));
-        }
-      } catch (e) {
-        console.warn('Failed loading settings:', e);
-      }
-    })();
-  }, []);
+  const loadSettingsFromAPI = async () => {
+  try {
+    setIsLoading(true);
+    
+    // Get mapped settings from backend 
+    const backendSettings = await userSettingsAPI.getAllSettings();
+    
+    // Also get local-only settings from AsyncStorage
+    const localData = await AsyncStorage.multiGet([
+      'userLanguage',
+      'userTheme',
+    ]);
+    const localLookup = Object.fromEntries(localData);
 
-  // ─── Helpers ─────────────────────────────────────────────────────────────
-  const update = (key, val) => {
-    setSettings(prev => ({ ...prev, [key]: val }));
-    // Don't auto-save in mobile personalization view - user must click Done
-    if (IS_MOBILE && currentView !== 'personalization') {
-      handleSave(key, val);
+    // ✅ MERGE BACKEND + LOCAL DATA with correct field names
+    setSettings(prev => ({
+      ...prev,
+      // ✅ NEW: User basic info from backend
+      fullName: backendSettings.fullName,
+      email: backendSettings.email,
+      phoneNumber: backendSettings.phoneNumber,
+      nickName: backendSettings.nickName,
+
+      // Backend settings (already mapped)
+      emailNotifications: backendSettings.emailNotifications,
+      pushNotifications: backendSettings.pushNotifications,
+      marketingEmails: backendSettings.marketingEmails,
+      selectedAvatar: backendSettings.selectedAvatar,
+      profession: backendSettings.profession,
+      industry: backendSettings.industry,
+      speLevel: backendSettings.speLevel,
+      speTone: backendSettings.speTone,
+      speResponse: backendSettings.speResponse,
+      twoFactorAuth: backendSettings.twoFactorAuth,
+      
+      // Local settings
+
+      language: localLookup.userLanguage || 'english',
+      theme: localLookup.userTheme || 'white',
+    }));
+
+    console.log('✅ Settings loaded and merged successfully');
+    
+  } catch (error) {
+    console.error('❌ Error loading settings:', error);
+    Alert.alert('Error', 'Failed to load settings. Using local data.');
+    await loadSettingsFromStorage();
+  } finally {
+    setIsLoading(false);
+  }
+};
+
+// ✅ UPDATED saveSettingToAPI function in SettingsPage.js
+
+const saveSettingToAPI = async (key, val) => {
+  try {
+    setIsSaving(true);
+
+    console.log(`💾 Saving ${key} = ${val} to API`);
+
+    // ✅ FIXED: Handle 2FA toggle properly
+    if (key === 'twoFactorAuth') {
+      await userSettingsAPI.toggle2FA(val);
+      console.log('✅ 2FA setting saved successfully');
+    } 
+    // ✅ FIXED: Handle phone number update
+    else if (key === 'phoneNumber') {
+      const generalData = {
+        phoneNumber: val,
+      };
+      await userSettingsAPI.updateGeneralSettings(generalData);
+      console.log('✅ Phone number saved successfully');
     }
-  };
+    // ✅ FIXED: Handle notification settings
+    else if (['emailNotifications', 'pushNotifications', 'marketingEmails'].includes(key)) {
+      const notificationData = {
+        emailNotifications: key === 'emailNotifications' ? val : settings.emailNotifications,
+        pushNotifications: key === 'pushNotifications' ? val : settings.pushNotifications,
+        marketingEmails: key === 'marketingEmails' ? val : settings.marketingEmails,
+      };
+      await userSettingsAPI.updateNotificationSettings(notificationData);
+      console.log('✅ Notification settings saved successfully');
+    } 
+    // ✅ FIXED: Handle personalization settings including nickname
+    else if (['selectedAvatar', 'profession', 'industry', 'speLevel', 'speTone', 'speResponse', 'nickName'].includes(key)) {
+      const personalizationData = {
+        selectedAvatar: key === 'selectedAvatar' ? val : settings.selectedAvatar,
+        profession: key === 'profession' ? val : settings.profession,
+        industry: key === 'industry' ? val : settings.industry,
+        speLevel: key === 'speLevel' ? val : settings.speLevel,
+        speTone: key === 'speTone' ? val : settings.speTone,
+        speResponse: key === 'speResponse' ? val : settings.speResponse,
+        nickName: key === 'nickName' ? val : settings.nickName,
+      };
+      await userSettingsAPI.updatePersonalizationSettings(personalizationData);
+      console.log('✅ Personalization settings saved successfully');
+    }
+    else {
+      console.warn(`⚠️ Unknown setting key: ${key}`);
+      return;
+    }
 
-  const handleSave = async (singleKey = null, singleVal = null) => {
+    console.log(`✅ ${key} saved to API successfully`);
+    
+  } catch (error) {
+    console.error(`❌ Error saving ${key} to API:`, error);
+    Alert.alert('Error', `Failed to save ${key}. Please try again.`);
+    
+    // ✅ FIXED: Revert the change on error
+    setSettings(prev => ({ ...prev, [key]: !val }));
+  } finally {
+    setIsSaving(false);
+  }
+};
+
+
+useEffect(() => {
+  // ✅ Debug tokens and load settings
+  const debugAndLoad = async () => {
     try {
-      let toStore;
-      if (singleKey && singleVal !== null) {
-        let storageKey = singleKey;
-        if (singleKey === 'fullName') storageKey = 'userFullName';
-        else if (singleKey === 'email') storageKey = 'userEmail';
-        else if (singleKey === 'phoneNumber') storageKey = 'userPhoneNumber';
-        else if (singleKey === 'nickName') storageKey = 'userNickName';
-        else if (singleKey === 'profession') storageKey = 'userProfession';
-        else if (singleKey === 'industry') storageKey = 'userIndustry';
-        else if (singleKey === 'language') storageKey = 'userLanguage';
-        else if (singleKey === 'theme') storageKey = 'userTheme';
-        else if (singleKey === 'twoFactorAuth') storageKey = 'has2FA';
-        else if (singleKey === 'selectedAvatar') storageKey = 'userAvatar';
-        else if (singleKey === 'customAvatarUri') storageKey = 'customAvatarUri';
-        
-        const storeVal = typeof singleVal === 'boolean' ? singleVal.toString() : singleVal.toString();
-        await AsyncStorage.setItem(storageKey, storeVal);
-      } else {
-        toStore = Object.entries(settings).map(([key, val]) => {
-          let storageKey = key;
-          if (key === 'fullName') storageKey = 'userFullName';
-          else if (key === 'email') storageKey = 'userEmail';
-          else if (key === 'phoneNumber') storageKey = 'userPhoneNumber';
-          else if (key === 'nickName') storageKey = 'userNickName';
-          else if (key === 'profession') storageKey = 'userProfession';
-          else if (key === 'industry') storageKey = 'userIndustry';
-          else if (key === 'language') storageKey = 'userLanguage';
-          else if (key === 'theme') storageKey = 'userTheme';
-          else if (key === 'twoFactorAuth') storageKey = 'has2FA';
-          else if (key === 'selectedAvatar') storageKey = 'userAvatar';
-          else if (key === 'customAvatarUri') return null; // Skip this as it's handled separately
-          
-          if (storageKey === null) return null;
-          const storeVal = typeof val === 'boolean' ? val.toString() : (typeof val === 'string' ? val : JSON.stringify(val));
-          return [storageKey, storeVal];
-        }).filter(Boolean);
-        
-        await AsyncStorage.multiSet(toStore);
-        
-        // Handle custom avatar separately
-        if (settings.customAvatarUri) {
-          await AsyncStorage.setItem('customAvatarUri', settings.customAvatarUri);
-        }
-        
-        Alert.alert('Success', 'Your settings have been saved successfully!');
-      }
-    } catch (e) {
-      console.warn('Save error:', e);
-      if (!singleKey) {
-        Alert.alert('Error', 'Could not save settings. Please try again.');
-      }
+      console.log('🔍 Debugging authentication tokens...');
+      await userSettingsAPI.debugTokens();
+      
+      // Then try to load settings
+      await loadSettingsFromAPI();
+    } catch (error) {
+      console.error('❌ Error in debug and load:', error);
+      // Fallback to local storage
+      await loadSettingsFromLocalStorage();
     }
   };
+  
+  debugAndLoad();
+}, []);
+
+// ✅ ADD this fallback function
+const loadSettingsFromLocalStorage = async () => {
+  try {
+    const data = await AsyncStorage.multiGet([
+      'userFullName',
+      'userEmail',
+      'userPhoneNumber',
+      'userNickName',
+      'userProfession',
+      'userIndustry',
+      'userLanguage',
+      'userTheme',
+      'emailNotifications',
+      'pushNotifications',
+      'marketingEmails',
+      'speLevel',
+      'speTone',
+      'speResponse',
+      'has2FA',
+      'userPlan',
+      'userAvatar',
+      'paymentMethods',
+    ]);
+    const lookup = Object.fromEntries(data);
+    
+    setSettings(prev => ({
+      ...prev,
+      fullName: lookup.userFullName || '',
+      email: lookup.userEmail || '',
+      phoneNumber: lookup.userPhoneNumber || '',
+      nickName: lookup.userNickName || '',
+      profession: lookup.userProfession || '',
+      industry: lookup.userIndustry || '',
+      language: lookup.userLanguage || 'english',
+      theme: lookup.userTheme || 'white',
+      emailNotifications: lookup.emailNotifications === 'true' || lookup.emailNotifications === null ? true : false,
+      pushNotifications: lookup.pushNotifications === 'true',
+      marketingEmails: lookup.marketingEmails === 'true',
+      speLevel: lookup.speLevel || 'intermediate',
+      speTone: lookup.speTone || 'casual_friendly',
+      speResponse: lookup.speResponse || '',
+      twoFactorAuth: lookup.has2FA === 'true',
+      selectedAvatar: lookup.userAvatar || 'default',
+    }));
+    
+    setCurrentPlan(lookup.userPlan || 'free');
+    
+    if (lookup.paymentMethods) {
+      setPaymentMethods(JSON.parse(lookup.paymentMethods));
+    }
+  } catch (error) {
+    console.error('❌ Error loading from local storage:', error);
+  } finally {
+    setIsLoading(false);
+  }
+};
+
+
+const update = async (key, val, saveImmediately = false) => {
+  // Update local state first
+  setSettings(prev => ({ ...prev, [key]: val }));
+  
+  // ✅ FIXED: Check if this is a backend setting and should be saved immediately
+  const backendKeys = [
+    'emailNotifications', 'pushNotifications', 'marketingEmails',
+    'selectedAvatar', 'profession', 'industry', 'speLevel', 
+    'speTone', 'speResponse', 'twoFactorAuth', 'phoneNumber', 'nickName'
+  ];
+  
+  if (backendKeys.includes(key)) {
+    // Always save backend settings immediately
+    await saveSettingToAPI(key, val);
+  }
+  
+  // For local-only settings, save to AsyncStorage immediately
+  const localKeys = ['language', 'theme'];
+  if (localKeys.includes(key)) {
+    await saveLocalSetting(key, val);
+  }
+};
+
+const saveLocalSetting = async (key, val) => {
+  try {
+    let storageKey = key;
+    if (key === 'phoneNumber') storageKey = 'userPhoneNumber';
+    else if (key === 'language') storageKey = 'userLanguage';
+    else if (key === 'theme') storageKey = 'userTheme';
+    
+    const storeVal = typeof val === 'boolean' ? val.toString() : val;
+    await AsyncStorage.setItem(storageKey, storeVal);
+    
+    console.log(`✅ ${key} saved to local storage`);
+  } catch (error) {
+    console.error(`❌ Error saving ${key} to storage:`, error);
+  }
+};
+
+
+
+
+// ✅ REPLACE handleSave function
+const handleSave = async () => {
+  try {
+    setIsSaving(true);
+
+    // Prepare notification settings with current frontend field names
+    const notificationData = {
+      emailNotifications: settings.emailNotifications,
+      pushNotifications: settings.pushNotifications, 
+      marketingEmails: settings.marketingEmails,
+    };
+
+    // Prepare personalization settings with current frontend field names
+    const personalizationData = {
+      selectedAvatar: settings.selectedAvatar,
+      profession: settings.profession,
+      industry: settings.industry,
+      speLevel: settings.speLevel,
+      speTone: settings.speTone,
+      speResponse: settings.speResponse,
+      nickName: settings.nickName, 
+    };
+
+    const generalData = {
+      phoneNumber: settings.phoneNumber,
+    };
+
+    // Save to backend (API will handle field mapping)
+    await Promise.all([
+      userSettingsAPI.updateNotificationSettings(notificationData),
+      userSettingsAPI.updatePersonalizationSettings(personalizationData),
+      userSettingsAPI.updateGeneralSettings(generalData),
+    ]);
+
+    // Save local settings to storage
+    const localData = [
+      ['userPhoneNumber', settings.phoneNumber],
+      ['userLanguage', settings.language], 
+      ['userTheme', settings.theme],
+    ].filter(([key, val]) => val); // Only save non-empty values
+
+    if (localData.length > 0) {
+      await AsyncStorage.multiSet(localData);
+    }
+
+    Alert.alert('Success', 'All settings saved successfully!');
+    console.log('✅ All settings saved successfully');
+
+  } catch (error) {
+    console.error('❌ Error saving settings:', error);
+    Alert.alert('Error', 'Failed to save some settings. Please try again.');
+  } finally {
+    setIsSaving(false);
+  }
+};
 
   // ─── Logout Handler ──────────────────────────────────────────────────────
   const handleLogout = async () => {

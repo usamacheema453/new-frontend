@@ -13,10 +13,14 @@ import {
   Image,
   Alert,
 } from 'react-native'
-import { useNavigation } from '@react-navigation/native'
+import { useNavigation, useRoute } from '@react-navigation/native'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { LinearGradient } from 'expo-linear-gradient'
 import { Shield, ArrowLeft } from 'lucide-react-native'
+
+
+const BACKEND_URL= "http://localhost:8000"
+
 
 export default function TwoFactorPage() {
   const [otp, setOtp] = useState(['', '', '', '', '', ''])
@@ -26,6 +30,7 @@ export default function TwoFactorPage() {
   const [contactValue, setContactValue] = useState('')
   const inputRefs = useRef([])
   const navigation = useNavigation()
+  const route = useRoute()
 
   //add new state
   const [isSignupFlow, setIsSignupFlow] = useState(false)
@@ -34,34 +39,63 @@ export default function TwoFactorPage() {
 
 
   useEffect(() => {
-    ;(async () => {
-      //check the last page come from signup or login
-      const signupFlow = route?.params?.isSignupFlow || false;
-          const loginFlow = route?.params?.isLoginFlow || false;
-    const method = route?.params?.method || (await AsyncStorage.getItem('2faMethod')) || 'email';
-    const contact = route?.params?.contact || 
-      (await AsyncStorage.getItem('2faContact')) ||
-      (await AsyncStorage.getItem('userEmail')) || '';
+    (async () => {
+      try {
+        // ✅ Get all parameters with fallbacks
+        const signupFlow = route?.params?.isSignupFlow || false
+        const loginFlow = route?.params?.isLoginFlow || false
+        const method = route?.params?.method || (await AsyncStorage.getItem('2faMethod')) || 'email'
+        
+        // ✅ Better contact value retrieval
+        let contact = route?.params?.contact || (await AsyncStorage.getItem('2faContact'))
+        if (!contact) {
+          contact = await AsyncStorage.getItem('userEmail') || ''
+        }
 
-          const email = signupFlow ? 
-      (route?.params?.userEmail || await AsyncStorage.getItem('signupUserEmail')) :
-      (route?.params?.userEmail || await AsyncStorage.getItem('loginUserEmail') || await AsyncStorage.getItem('userEmail'));
+        // ✅ Better email retrieval with multiple fallbacks
+        let email = route?.params?.userEmail
+        
+        if (!email) {
+          if (signupFlow) {
+            email = await AsyncStorage.getItem('signupUserEmail')
+          } else if (loginFlow) {
+            email = await AsyncStorage.getItem('loginUserEmail')
+          }
+        }
+        
+        if (!email) {
+          email = await AsyncStorage.getItem('userEmail') || ''
+        }
 
-    console.log('TwoFactor flow - signup:', signupFlow, 'login:', loginFlow, 'method:', method, 'email:', email);
+        console.log('TwoFactor flow - signup:', signupFlow, 'login:', loginFlow, 'method:', method, 'email:', email, 'contact:', contact)
 
+        // ✅ Set all states
+        setIsSignupFlow(signupFlow)
+        setIsLoginFlow(loginFlow)
+        setUserEmail(email)
+        setContactMethod(method)
+        setContactValue(contact)
 
-      setIsSignupFlow(signupFlow);
-      setIsLoginFlow(loginFlow);
-      setUserEmail(email);
-      setContactMethod(method);
-      setContactValue(contact);
+        // ✅ Alert if email is still missing
+        if (!email) {
+          console.error('❌ No email found! Redirecting to login...')
+          navigation.navigate('Login')
+          return
+        }
 
-      // Focus first OTP input
-      if (inputRefs.current[0]) {
-        inputRefs.current[0].focus()
+        // Focus first input
+        setTimeout(() => {
+          if (inputRefs.current[0]) {
+            inputRefs.current[0].focus()
+          }
+        }, 100)
+
+      } catch (error) {
+        console.error('❌ Error in TwoFactor useEffect:', error)
+        navigation.navigate('Login')
       }
     })()
-  }, [])
+  }, [route?.params])
 
   useEffect(() => {
     if (resendTimer > 0) {
@@ -69,6 +103,60 @@ export default function TwoFactorPage() {
       return () => clearTimeout(timer)
     }
   }, [resendTimer])
+
+
+    // ✅ Check subscription status and navigate accordingly  
+  const checkSubscriptionAndNavigate = async (userData) => {
+    try {
+      console.log('📋 Checking subscription status for:', userData.user.email);
+      
+      const response = await fetch(`${BACKEND_URL}/subscriptions/current/${userData.user.email}`);
+      const subscriptionData = await response.json();
+      
+      
+      if (subscriptionData.has_subscription) {
+        // User has active subscription - go to main app
+        await AsyncStorage.setItem('userPlan', subscriptionData.plan);
+        navigation.reset({
+          index: 0,
+          routes: [{ name: 'Chat' }],
+        });
+      } else {
+        // No subscription - show pricing screen
+        await AsyncStorage.setItem('userPlan', 'none');
+        navigation.reset({
+          index: 0,
+          routes: [{
+            name: 'Pricing',
+            params: {
+              isFirstLogin: false,
+              requiresPlanSelection: subscriptionData.requires_plan_selection,
+              message: subscriptionData.message,
+              userEmail: userData.user.email,
+              userName: userData.user.full_name
+            }
+          }],
+        });
+      }
+    } catch (error) {
+      console.error('❌ Error checking subscription:', error);
+      // Fallback to pricing screen
+      navigation.reset({
+        index: 0,
+        routes: [{
+          name: 'Pricing',
+          params: {
+            isFirstLogin: false,
+            userEmail: userData.user.email,
+            userName: userData.user.full_name
+          }
+        }],
+      });
+    }
+  };
+
+
+
 
   const handleOtpChange = (index, value) => {
     if (value.length > 1) return
@@ -90,163 +178,145 @@ export default function TwoFactorPage() {
   const handleVerify = async () => {
     const otpCode = otp.join('')
     if (otpCode.length !== 6) {
-      alert('Please enter all 6 digits')
+      console.error('Please enter all 6 digits');
       return
     }
+
+        // ✅ Check if email exists before making API call
+    if (!userEmail) {
+      console.error('Session expired. Please login again.')
+      navigation.navigate('Login')
+      return
+    }
+
+    
     setIsLoading(true)
 
-    try{
+    try {
       let response;
-      if(isLoginFlow){
-       // For login flow, use complete-login endpoint
-      response = await fetch(`${API_BASE_URL}/auth/complete-login`, {
+      if (isLoginFlow) {
+        // For login flow, use complete-login endpoint
+        response = await fetch(`${BACKEND_URL}/auth/complete-login`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            email: userEmail,
+            otp_code: otpCode,
+            auth_method: contactMethod,
+          }),
+        });
+      } else {
+        response = await fetch(`${BACKEND_URL}/auth/verify-2fa-otp`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            email: userEmail,
+            otp_code: otpCode,
+            auth_method: contactMethod,
+          })
+        })
+      }
+      
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.detail || 'Verification failed');
+      }
+
+      // Handle success based on flow type
+      if (isSignupFlow) {
+        // For signup flow: mark 2FA as complete and redirect to login
+        await AsyncStorage.setItem('2faSetupComplete', 'true');
+        
+        navigation.navigate('Login', {
+          message: 'Account created and 2FA setup complete! Please verify your email and sign in.'
+        });
+
+      } else if (isLoginFlow) {
+        // For login flow: complete authentication and store tokens
+        await AsyncStorage.setItem('accessToken', data.access_token);
+        await AsyncStorage.setItem('refreshToken', data.refresh_token);
+        await AsyncStorage.setItem('userEmail', data.user.email);
+        await AsyncStorage.setItem('userName', data.user.full_name);
+        await AsyncStorage.setItem('userId', data.user.id.toString());
+        await AsyncStorage.setItem('has2FA', data.user.is_2fa_enabled ? 'true' : 'false');
+        await AsyncStorage.setItem('isAuthenticated', 'true');
+
+        // Clean up login email
+        await AsyncStorage.removeItem('loginUserEmail');
+
+        // ✅ Check if this is first-time login after 2FA
+        if (data.is_first_login) {
+          console.log('🆕 First-time login detected after 2FA');
+          
+          navigation.reset({
+            index: 0,
+            routes: [{
+              name: 'Pricing',
+              params: {
+                isFirstLogin: true,
+                userEmail: data.user.email,
+                userName: data.user.full_name,
+                loginCount: data.login_count
+              }
+            }],
+          });
+        } else {
+          console.log('🔄 Returning user login after 2FA');
+          
+          // Check subscription status for returning users
+          await checkSubscriptionAndNavigate(data);
+        }
+      }
+
+    } catch (error) {
+      console.error('2FA verification error:', error);
+      // Clear OTP inputs on error
+      setOtp(['', '', '', '', '', '']);
+      inputRefs.current[0]?.focus();
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  const handleResend = async () => {
+    try {
+      setResendTimer(45);
+
+      let endpoint;
+      if (isLoginFlow) {
+        endpoint = `${BACKEND_URL}/auth/resend-login-otp`;
+      } else {
+        endpoint = `${BACKEND_URL}/auth/resend-2fa-otp`;
+      }
+
+      const response = await fetch(endpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
           email: userEmail,
-          otp_code: otpCode,
           auth_method: contactMethod,
+          contact: contactValue,
         }),
       });
-      }else{
-        response = await fetch(`${API_BASE_URL}/auth/verify-2fa-otp`,{
-          method: 'POST',
-          headers:{
-             'Content-Type': 'application/json',
-          },
-          body:  JSON.stringify({
-                      email: userEmail,
-          otp_code: otpCode,
-          auth_method: contactMethod,
-          })
-        })
-      }
-      const data = await response.json();
 
-          if (!response.ok) {
-      throw new Error(data.detail || 'Verification failed');
-    }
-
-        // Handle success based on flow type
-    if (isSignupFlow) {
-      // For signup flow: mark 2FA as complete and redirect to login
-      await AsyncStorage.setItem('2faSetupComplete', 'true');
-      
-       navigation.navigate('Login', {
-          message: 'Account created and 2FA setup complete! Please verify your email and sign in.'
-        });
-
-
-      // Alert.alert(
-      //   '2FA Setup Complete!',
-      //   'Your account is now secured with two-factor authentication. Please verify your email and sign in.',
-      //   [
-      //     {
-      //       text: 'Continue to Login',
-      //       onPress: () => {
-      //         navigation.navigate('Login', {
-      //           message: 'Account created and 2FA setup complete! Please verify your email and sign in.'
-      //         });
-      //       }
-      //     }
-      //   ]
-      // );
-    } else if (isLoginFlow) {
-      // For login flow: complete authentication and store tokens
-      await AsyncStorage.setItem('accessToken', data.access_token);
-      await AsyncStorage.setItem('refreshToken', data.refresh_token);
-      await AsyncStorage.setItem('userEmail', data.user.email);
-      await AsyncStorage.setItem('userName', data.user.full_name);
-      await AsyncStorage.setItem('userId', data.user.id.toString());
-      await AsyncStorage.setItem('has2FA', data.user.is_2fa_enabled ? 'true' : 'false');
-      await AsyncStorage.setItem('isAuthenticated', 'true');
-
-      // Get user's current subscription
-      try {
-        const subResponse = await fetch(`${API_BASE_URL}/subscriptions/current/${data.user.email}`);
-        if (subResponse.ok) {
-          const subData = await subResponse.json();
-          await AsyncStorage.setItem('userPlan', subData.plan);
-        }
-      } catch (error) {
-        console.warn('Failed to load subscription:', error);
-        await AsyncStorage.setItem('userPlan', 'free');
-      }
-
-      // Clean up login email
-      await AsyncStorage.removeItem('loginUserEmail');
-
-      // Check if user has a paid plan
-      const userPlan = await AsyncStorage.getItem('userPlan') || 'free';
-      
-      if (userPlan === 'free') {
-        navigation.reset({
-          index: 0,
-          routes: [{ 
-            name: 'Pricing', 
-            params: { 
-              isFirstLogin: true,
-              userEmail: data.user.email,
-              userName: data.user.full_name
-            } 
-          }],
-        });
+      if (response.ok) {
+        console.log(`✅ New verification code has been sent to your ${contactMethod}.`);
       } else {
-        navigation.reset({
-          index: 0,
-          routes: [{ name: 'Chat' }],
-        });
+        const errorData = await response.json();
+        throw new Error(errorData.detail || 'Failed to resend code');
       }
+    } catch (error) {
+      console.error('Resend error:', error);
+      console.error(error.message || 'Failed to resend code. Please try again.');
+      setResendTimer(0);
     }
-
-    }catch(error){
-      console.error('2FA verification error:', error);
-      // Clear OTP inputs on error
-      setOtp(['', '', '', '', '', '']);
-      inputRefs.current[0]?.focus();
-    }finally{
-      setIsLoading(false);
-    }
-  }
-
-  const handleResend = async () => {
-   try{
-    setResendTimer(45);
-
-    let endpoint;
-    if (isLoginFlow) {
-      // For login flow, trigger OTP resend via login attempt
-      endpoint = `${API_BASE_URL}/auth/resend-login-otp`;
-    } else {
-      // For signup flow, use existing resend endpoint
-      endpoint = `${API_BASE_URL}/auth/resend-2fa-otp`;
-    }
-
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers:{
-        'Content-Type': 'application/json',
-      },
-      body:JSON.stringify({
-        email: userEmail,
-        auth_method: contactMethod,
-        contact: contactValue,
-      }),
-    });
-
-    if(response.ok){
-        Alert.alert('Code Sent', `A new verification code has been sent to your ${contactMethod}.`);
-    }else{
-      const errorData = await response.json();
-      throw new Error(errorData.detail || 'Failed to resend code');
-    }
-   }catch(error){
-            console.error('Resend error:', error);
-            Alert.alert('Error', error.message || 'Failed to resend code. Please try again.');
-            setResendTimer(0); // Reset timer on error
-   }
   }
 
   const formatContact = (value, method) => {

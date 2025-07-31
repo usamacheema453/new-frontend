@@ -36,7 +36,7 @@ const IS_MOBILE = SCREEN_WIDTH < 768;
 // Default settings values
 const DEFAULT_SETTINGS = {
   speLevel: 'intermediate',
-  speTone: 'professional',
+  speTone: 'casual_friendly',
 };
 
 function SettingField({ icon, title, description, children, readonly = false }) {
@@ -337,7 +337,7 @@ export default function PersonalizationSection({
   ];
 
   const communicationToneOptions = [
-    { v: 'casual', l: 'Casual & Friendly', desc: 'Relaxed conversation style' },
+    { v: 'casual_friendly', l: 'Casual & Friendly', desc: 'Relaxed conversation style' },
     { v: 'professional', l: 'Professional & Formal', desc: 'Formal business tone' }, // Default
     { v: 'polite', l: 'Polite & Respectful', desc: 'Courteous approach' },
     { v: 'enthusiastic', l: 'Enthusiastic & Energetic', desc: 'Energetic responses' },

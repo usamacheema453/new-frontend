@@ -41,146 +41,139 @@ export default function PricingScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
   const [isYearly, setIsYearly] = useState(false);
   const [selectedPlan, setSelectedPlan] = useState(null);
-  const [currentPlan, setCurrentPlan] = useState('free');
+  const [currentPlan, setCurrentPlan] = useState('');
   const [plans, setPlans] = useState([]);
   const [loading, setLoading] = useState(true);
   const [paymentLoading, setPaymentLoading] = useState(false);
   const [userEmail, setUserEmail] = useState('');
-
+  const [processingMessage, setProcessingMessage] = useState('');
   // ✅ Check if this is a signup flow
   const isSignupFlow = route?.params?.isSignupFlow || false;
+  const isFirstLogin = route?.params?.isFirstLogin || false;
 
-  // ✅ API Service with proper error handling
+  
+  // ✅ API Service
   const apiService = {
-    // Get user email from storage
-    getUserEmail: async () => {
-      try {
-        const email = await AsyncStorage.getItem('userEmail') || 
-                     await AsyncStorage.getItem('signupUserEmail');
-        console.log('📧 Retrieved user email:', email);
-        return email;
-      } catch (error) {
-        console.error('Error getting user email:', error);
-        return null;
+  getUserEmail: async () => {
+    try {
+      // ✅ ONLY use the actual logged-in user's email
+      const userEmail = await AsyncStorage.getItem('userEmail');
+      
+      if (!userEmail) {
+        console.error('❌ No authenticated user email found');
+        throw new Error('Please log in again');
       }
-    },
+      
+      console.log('📧 Using authenticated user email:', userEmail);
+      return userEmail;
+    } catch (error) {
+      console.error('Error getting user email:', error);
+      throw error;
+    }
+  },
 
-    // Create payment intent for WEB
-    createPaymentForWeb: async (email, planId, billingCycle) => {
-      try {
-        console.log('🌐 Creating web payment:', { email, planId, billingCycle });
-        
-        const response = await fetch(`${API_BASE_URL}/subscriptions/create-payment`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            email,
-            plan_id: planId,
-            billing_cycle: billingCycle,
-          }),
-        });
-
-        const data = await response.json();
-        console.log('📋 Web payment response:', data);
-
-        if (!response.ok) {
-          throw new Error(data.detail || 'Failed to create payment');
-        }
-
-        return data;
-      } catch (error) {
-        console.error('❌ Web payment error:', error);
-        throw error;
+  createCheckoutSessionForWeb: async (email, planId, billingCycle) => {
+    try {
+      console.log('🌐 Creating checkout session with REAL data:', { email, planId, billingCycle });
+      
+      // ✅ VALIDATE: Ensure we have a real email
+      if (!email || !email.includes('@')) {
+        throw new Error('Invalid email address');
       }
-    },
 
-    // Create checkout session for WEB
-    createCheckoutSessionForWeb: async (email, planId, billingCycle) => {
-      try {
-        console.log('🌐 Creating checkout session for web:', { email, planId, billingCycle });
-        
-        const response = await fetch(`${API_BASE_URL}/subscriptions/create-checkout-session`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            email,
-            plan_id: planId,
-            billing_cycle: billingCycle,
-            success_url: Platform.OS === 'web' 
-              ? `${window.location.origin}/payment-success` 
-              : 'superengineer://payment-success',
-            cancel_url: Platform.OS === 'web' 
-              ? `${window.location.origin}/pricing` 
-              : 'superengineer://pricing',
-          }),
-        });
-
-        const data = await response.json();
-        console.log('📋 Checkout session response:', data);
-
-        if (!response.ok) {
-          throw new Error(data.detail || 'Failed to create checkout session');
-        }
-
-        return data;
-      } catch (error) {
-        console.error('❌ Checkout session error:', error);
-        throw error;
+      let successUrl, cancelUrl;
+      
+      if (Platform.OS === 'web') {
+        successUrl = `${window.location.origin}/payment-success?session_id={CHECKOUT_SESSION_ID}`;
+        cancelUrl = `${window.location.origin}/pricing`;
+      } else {
+        successUrl = 'superengineer://payment-success?session_id={CHECKOUT_SESSION_ID}';
+        cancelUrl = 'superengineer://pricing';
       }
-    },
 
-    // Activate free plan
-    activateFreePlan: async (email) => {
-      try {
-        console.log('🆓 Activating free plan for:', email);
-        
-        const response = await fetch(`${API_BASE_URL}/subscriptions/activate-free`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ email }),
-        });
+      const response = await fetch(`${API_BASE_URL}/subscriptions/create-checkout-session`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          email: email, // ✅ Use REAL authenticated user email
+          plan_id: planId,
+          billing_cycle: billingCycle,
+          success_url: successUrl,
+          cancel_url: cancelUrl,
+        }),
+      });
 
-        const data = await response.json();
-        console.log('📋 Free plan response:', data);
+      const data = await response.json();
+      console.log('📋 Checkout session response:', data);
 
-        if (!response.ok) {
-          throw new Error(data.detail || 'Failed to activate free plan');
-        }
-
-        return data;
-      } catch (error) {
-        console.error('❌ Free plan error:', error);
-        throw error;
+      if (!response.ok) {
+        throw new Error(data.detail || 'Failed to create checkout session');
       }
-    },
 
-    // Get current subscription
-    getCurrentSubscription: async (email) => {
-      try {
-        console.log('📋 Getting subscription for:', email);
-        
-        const response = await fetch(`${API_BASE_URL}/subscriptions/current/${email}`);
-        const data = await response.json();
-        
-        if (!response.ok) {
-          throw new Error(data.detail || 'Failed to get subscription');
-        }
+      return data;
+    } catch (error) {
+      console.error('❌ Checkout session error:', error);
+      throw error;
+    }
+  },
 
-        console.log('📋 Current subscription:', data);
-        return data;
-      } catch (error) {
-        console.error('❌ Get subscription error:', error);
-        throw error;
+  activateFreePlan: async (email) => {
+    try {
+      console.log('🆓 Activating free plan for REAL user:', email);
+      
+      // ✅ VALIDATE: Ensure we have a real email
+      if (!email || !email.includes('@')) {
+        throw new Error('Invalid email address');
       }
-    },
+      
+      const response = await fetch(`${API_BASE_URL}/subscriptions/activate-free`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ email: email }), // ✅ Use REAL email
+      });
 
-    // Get subscription plans
+      const data = await response.json();
+      console.log('📋 Free plan response:', data);
+
+      if (!response.ok) {
+        throw new Error(data.detail || 'Failed to activate free plan');
+      }
+
+      return data;
+    } catch (error) {
+      console.error('❌ Free plan error:', error);
+      throw error;
+    }
+  },
+
+  getCurrentSubscription: async (email) => {
+    try {
+      console.log('📋 Getting subscription for REAL user:', email);
+      
+      // ✅ VALIDATE: Ensure we have a real email
+      if (!email || !email.includes('@')) {
+        throw new Error('Invalid email address');
+      }
+      
+      const response = await fetch(`${API_BASE_URL}/subscriptions/current/${encodeURIComponent(email)}`);
+      const data = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(data.detail || 'Failed to get subscription');
+      }
+
+      console.log('📋 Current subscription:', data);
+      return data;
+    } catch (error) {
+      console.error('❌ Get subscription error:', error);
+      throw error;
+    }
+  },
+
     getPlans: async () => {
       try {
         const response = await fetch(`${API_BASE_URL}/subscriptions/plans`);
@@ -198,61 +191,51 @@ export default function PricingScreen({ navigation, route }) {
     }
   };
 
-  // ✅ Initialize data on component mount
+
   useEffect(() => {
-    const initializeData = async () => {
-      try {
-        setLoading(true);
-        
-        // Get user email
-        const email = await apiService.getUserEmail();
-        if (email) {
-          setUserEmail(email);
-          console.log('👤 User email loaded:', email);
-        } else {
-          console.warn('⚠️ No user email found');
-        }
-
-        if (isSignupFlow) {
-          // For signup flow, user doesn't have a current plan yet
-          setCurrentPlan(null);
-          console.log('🆕 Signup flow detected');
-        } else {
-          // Get current subscription from backend
-          if (email) {
-            try {
-              const subscription = await apiService.getCurrentSubscription(email);
-              const plan = subscription.plan || 'free';
-              setCurrentPlan(plan);
-              console.log('📋 Current plan loaded:', plan);
-            } catch (error) {
-              console.log('⚠️ Could not get subscription, defaulting to free');
-              setCurrentPlan('free');
-            }
-          }
-        }
-
-        // Optionally load plans from backend (you can remove this if using static plans)
-        try {
-          const plansData = await apiService.getPlans();
-          if (plansData?.plans) {
-            setPlans(plansData.plans);
-            console.log('📋 Loaded plans from backend:', plansData.plans.length);
-          }
-        } catch (error) {
-          console.log('⚠️ Using static plans');
-        }
-
-      } catch (error) {
-        console.error('Error initializing data:', error);
-        setCurrentPlan('free');
-      } finally {
-        setLoading(false);
+  const initializeData = async () => {
+    try {
+      setLoading(true);
+      
+      // ✅ VALIDATE: Get REAL authenticated user email
+      const email = await apiService.getUserEmail();
+      if (!email) {
+        console.error('⚠️ No authenticated user found');
+        // Redirect to login
+        navigation.navigate('Login');
+        return;
       }
-    };
+      
+      setUserEmail(email);
+      console.log('👤 Authenticated user email loaded:', email);
 
-    initializeData();
-  }, [route?.params, isSignupFlow]);
+      if (isSignupFlow || isFirstLogin) {
+        setCurrentPlan(null);
+        console.log('🆕 First-time user detected');
+      } else {
+        try {
+          const subscription = await apiService.getCurrentSubscription(email);
+          const plan = subscription.plan || 'none';
+          setCurrentPlan(plan);
+          console.log('📋 Current plan loaded:', plan);
+        } catch (error) {
+          console.log('⚠️ Could not get subscription, user needs to select plan');
+          setCurrentPlan(null);
+        }
+      }
+
+    } catch (error) {
+      console.error('Error initializing data:', error);
+      // Redirect to login if no valid user
+      navigation.navigate('Login');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  initializeData();
+}, [route?.params, isSignupFlow, isFirstLogin]);
+
 
   // ✅ Plan data (matching your backend structure)
   const allPlans = [
@@ -335,9 +318,25 @@ export default function PricingScreen({ navigation, route }) {
     },
   ];
 
-  // ✅ Handle payments differently for Web vs Native
+    // ✅ Show processing status without alerts
+  const showStatus = (message, isError = false) => {
+    setProcessingMessage(message);
+    setTimeout(() => setProcessingMessage(''), 3000);
+    if (isError) {
+      console.error('❌', message);
+    } else {
+      console.log('✅', message);
+    }
+  };
+
+
+
+
+ 
+  // ✅ Handle payment processing
   const handlePayment = async (planId, amount, billingCycle) => {
     setPaymentLoading(true);
+    setProcessingMessage('Processing payment...');
 
     try {
       if (!userEmail) {
@@ -358,7 +357,9 @@ export default function PricingScreen({ navigation, route }) {
       });
 
       if (Platform.OS === 'web') {
-        // ✅ For WEB: Use Stripe Checkout (redirect to Stripe)
+        // ✅ For WEB: Direct Stripe Checkout redirect
+        setProcessingMessage('Redirecting to payment...');
+        
         const checkoutData = await apiService.createCheckoutSessionForWeb(
           userEmail,
           plan.backendId,
@@ -368,123 +369,67 @@ export default function PricingScreen({ navigation, route }) {
         if (checkoutData.success && checkoutData.checkout_url) {
           console.log('🌐 Redirecting to Stripe Checkout:', checkoutData.checkout_url);
           
-          // Redirect to Stripe Checkout
+          // Direct redirect for web
           window.location.href = checkoutData.checkout_url;
           
-          return {
-            success: true,
-            paymentId: checkoutData.session_id,
-            redirected: true
-          };
+          return { success: true, redirected: true };
         } else {
           throw new Error('Failed to create checkout session');
         }
 
       } else {
-        // ✅ For NATIVE: Redirect to web version or show alternative
-        Alert.alert(
-          'Payment Required',
-          'To complete your purchase, we\'ll redirect you to our secure web payment page.',
-          [
-            {
-              text: 'Cancel',
-              style: 'cancel',
-              onPress: () => {
-                setPaymentLoading(false);
-                setSelectedPlan(null);
-              }
-            },
-            {
-              text: 'Continue to Web',
-              onPress: async () => {
-                try {
-                  // Create checkout session for native redirect
-                  const checkoutData = await apiService.createCheckoutSessionForWeb(
-                    userEmail,
-                    plan.backendId,
-                    billingCycle === 'year' ? 'yearly' : 'monthly'
-                  );
-
-                  if (checkoutData.success && checkoutData.checkout_url) {
-                    console.log('📱 Opening web checkout in browser:', checkoutData.checkout_url);
-                    
-                    // Open in device browser
-                    const supported = await Linking.canOpenURL(checkoutData.checkout_url);
-                    
-                    if (supported) {
-                      await Linking.openURL(checkoutData.checkout_url);
-                      
-                      // Show message to user
-                      Alert.alert(
-                        'Payment in Progress',
-                        'Please complete your payment in the browser. Return to the app when done.',
-                        [
-                          {
-                            text: 'I completed payment',
-                            onPress: () => {
-                              // You could check payment status here
-                              setPaymentLoading(false);
-                              setSelectedPlan(null);
-                              
-                              // Optionally refresh subscription status
-                              setTimeout(() => {
-                                initializeData();
-                              }, 2000);
-                            }
-                          },
-                          {
-                            text: 'Cancel',
-                            style: 'cancel',
-                            onPress: () => {
-                              setPaymentLoading(false);
-                              setSelectedPlan(null);
-                            }
-                          }
-                        ]
-                      );
-                      
-                      return {
-                        success: true,
-                        paymentId: checkoutData.session_id,
-                        redirected: true
-                      };
-                    } else {
-                      throw new Error('Cannot open payment page');
-                    }
-                  } else {
-                    throw new Error('Failed to create payment session');
-                  }
-                } catch (error) {
-                  console.error('❌ Native payment redirect error:', error);
-                  setPaymentLoading(false);
-                  setSelectedPlan(null);
-                  throw error;
-                }
-              }
-            }
-          ]
-        );
+        // ✅ For NATIVE: Open browser directly
+        setProcessingMessage('Opening payment page...');
         
-        // Return pending state for native
-        return {
-          success: false,
-          pending: true
-        };
+        const checkoutData = await apiService.createCheckoutSessionForWeb(
+          userEmail,
+          plan.backendId,
+          billingCycle === 'year' ? 'yearly' : 'monthly'
+        );
+
+        if (checkoutData.success && checkoutData.checkout_url) {
+          console.log('📱 Opening web checkout:', checkoutData.checkout_url);
+          
+          const supported = await Linking.canOpenURL(checkoutData.checkout_url);
+          
+          if (supported) {
+            await Linking.openURL(checkoutData.checkout_url);
+            
+            // Show completion message
+            setProcessingMessage('Payment opened in browser. Return when complete.');
+            
+            // Auto-clear processing state
+            setTimeout(() => {
+              setPaymentLoading(false);
+              setSelectedPlan(null);
+              setProcessingMessage('');
+            }, 3000);
+            
+            return { success: true, redirected: true };
+          } else {
+            throw new Error('Cannot open payment page');
+          }
+        } else {
+          throw new Error('Failed to create payment session');
+        }
       }
 
     } catch (error) {
       console.error('❌ Payment error:', error);
       setPaymentLoading(false);
+      setSelectedPlan(null);
+      showStatus(error.message || 'Payment failed. Please try again.', true);
       throw error;
     }
   };
 
-  // ✅ Complete signup process
+
+
+  // ✅ Complete signup process without alerts
   const completeSignup = async (planId) => {
     try {
       console.log('🎯 Completing signup with plan:', planId);
 
-      // Get signup data
       const signupData = {
         userEmail: await AsyncStorage.getItem('signupUserEmail'),
         userName: await AsyncStorage.getItem('signupUserName'),
@@ -504,7 +449,7 @@ export default function PricingScreen({ navigation, route }) {
         ['userRole', signupData.userRole || 'user'],
         ['userPlan', planId],
         ['isAuthenticated', 'true'],
-        ['hasCompletedOnboarding', 'true'], // ✅ Mark onboarding as complete
+        ['hasCompletedOnboarding', 'true'],
       ]);
 
       // Set query limits based on plan
@@ -528,7 +473,7 @@ export default function PricingScreen({ navigation, route }) {
 
       console.log('✅ Signup completed successfully');
 
-      // ✅ Navigate to main app (not back to pricing)
+      // Navigate based on 2FA setting
       if (signupData.has2FA === 'true') {
         navigation.reset({
           index: 0,
@@ -537,145 +482,121 @@ export default function PricingScreen({ navigation, route }) {
       } else {
         navigation.reset({
           index: 0,
-          routes: [{ name: 'Chat' }], // Or your main screen
+          routes: [{ name: 'Chat' }],
         });
       }
     } catch (error) {
       console.error('Error completing signup:', error);
-      Alert.alert('Error', 'Failed to complete signup. Please try again.');
+      showStatus('Failed to complete signup. Please try again.', true);
     }
   };
 
-  // ✅ Handle plan selection
+
+  // ✅ Handle plan selection without alerts
   const handleSelectPlan = async (planId) => {
-    if (!isSignupFlow && planId === currentPlan) {
-      Alert.alert('Current Plan', 'You are already on this plan.');
+    // Check if user is already on this plan
+    if (!isSignupFlow && !isFirstLogin && planId === currentPlan) {
+      console.log('User is already on this plan:', planId);
+      showStatus('You are already on this plan');
       return;
     }
 
     console.log('🎯 Plan selected:', planId);
 
-    // Handle Free plan
+    // ✅ Handle Free plan - Direct execution
     if (planId === 'free') {
-      if (isSignupFlow) {
-        try {
-          // Activate free plan on backend
-          if (userEmail) {
-            await apiService.activateFreePlan(userEmail);
-            console.log('✅ Free plan activated on backend');
-          }
-          completeSignup(planId);
-          return;
-        } catch (error) {
-          console.error('Error activating free plan:', error);
-          // Still proceed with signup even if backend call fails
-          completeSignup(planId);
-          return;
+      setSelectedPlan(planId);
+      setProcessingMessage('Activating free plan...');
+      
+      try {
+        // Activate free plan on backend
+        if (userEmail) {
+          await apiService.activateFreePlan(userEmail);
+          console.log('✅ Free plan activated on backend');
+          showStatus('Free plan activated successfully!');
         }
-      } else {
-        // For existing users switching to free
-        Alert.alert(
-          'Switch to Free Plan',
-          'Are you sure you want to switch to the Free plan?',
-          [
-            { text: 'Cancel', style: 'cancel' },
-            {
-              text: 'Switch Plan',
-              onPress: async () => {
-                try {
-                  if (userEmail) {
-                    await apiService.activateFreePlan(userEmail);
-                  }
-                  await AsyncStorage.multiSet([
-                    ['userPlan', planId],
-                    ['freeQueries', '10']
-                  ]);
-                  setCurrentPlan(planId);
-                  Alert.alert('Success!', 'You have switched to the Free plan.');
-                } catch (error) {
-                  console.error('Error switching to free plan:', error);
-                  Alert.alert('Error', 'Failed to update your plan. Please try again.');
-                }
-              },
-            },
-          ]
-        );
+
+        if (isSignupFlow) {
+          completeSignup(planId);
+        } else {
+          // For existing users switching to free
+          await AsyncStorage.multiSet([
+            ['userPlan', planId],
+            ['freeQueries', '10']
+          ]);
+          setCurrentPlan(planId);
+          
+          // Navigate to main app
+          setTimeout(() => {
+            navigation.reset({
+              index: 0,
+              routes: [{ name: 'Chat' }],
+            });
+          }, 1500);
+        }
         return;
+      } catch (error) {
+        console.error('Error activating free plan:', error);
+        showStatus('Free plan activation failed, but proceeding...', true);
+        
+        // Still proceed with signup even if backend call fails
+        if (isSignupFlow) {
+          completeSignup(planId);
+        }
+        return;
+      } finally {
+        setSelectedPlan(null);
+        setProcessingMessage('');
       }
     }
 
-    // Handle Enterprise plan
+    // ✅ Handle Enterprise plan - Direct contact
     if (planId === 'enterprise') {
-      Alert.alert(
-        'Enterprise Plan',
-        'Contact our sales team for enterprise pricing and features.',
-        [
-          {
-            text: 'Contact Sales',
-            onPress: () => {
-              setSelectedPlan(null);
-              if (isSignupFlow) {
-                completeSignup('enterprise');
-              }
-              // Here you could open email client or website
-              const emailUrl = 'mailto:sales@superengineer.com?subject=Enterprise Plan Inquiry';
-              Linking.canOpenURL(emailUrl).then(supported => {
-                if (supported) {
-                  Linking.openURL(emailUrl);
-                }
-              });
-            },
-          },
-          { text: 'Cancel', style: 'cancel', onPress: () => setSelectedPlan(null) },
-        ]
-      );
+      setSelectedPlan(planId);
+      setProcessingMessage('Opening contact...');
+      
+      if (isSignupFlow) {
+        completeSignup('enterprise');
+      }
+      
+      // Open email client directly
+      const emailUrl = 'mailto:sales@superengineer.com?subject=Enterprise Plan Inquiry';
+      try {
+        const supported = await Linking.canOpenURL(emailUrl);
+        if (supported) {
+          await Linking.openURL(emailUrl);
+          showStatus('Contact email opened');
+        } else {
+          showStatus('Contact: sales@superengineer.com');
+        }
+      } catch (error) {
+        console.error('Error opening email client:', error);
+        showStatus('Contact: sales@superengineer.com');
+      }
+      
+      setTimeout(() => {
+        setSelectedPlan(null);
+        setProcessingMessage('');
+      }, 2000);
+      
       return;
     }
 
-    // Handle Paid plans
+    // ✅ Handle Paid plans - Direct payment processing
     setSelectedPlan(planId);
     const plan = allPlans.find(p => p.id === planId);
     const price = isYearly ? plan.yearlyPrice : plan.monthlyPrice;
     const billingCycle = isYearly ? 'year' : 'month';
 
-    const platformMessage = Platform.OS === 'web' 
-      ? '' 
-      : '\n\nYou will be redirected to our secure web payment page.';
+    console.log(`Processing payment for ${plan.name} plan: £${price}/${billingCycle}`);
 
-    Alert.alert(
-      isSignupFlow ? 'Complete Registration' : 'Upgrade Plan',
-      `${isSignupFlow ? 'Complete registration with' : 'Upgrade to'} ${plan.name} plan for £${price}/${billingCycle}?${platformMessage}`,
-      [
-        { text: 'Cancel', style: 'cancel', onPress: () => setSelectedPlan(null) },
-        {
-          text: 'Continue',
-          onPress: async () => {
-            try {
-              const paymentResult = await handlePayment(planId, price, billingCycle);
-              
-              if (paymentResult.success) {
-                if (Platform.OS === 'web') {
-                  // For web, payment will be handled by Stripe redirect
-                  console.log('🌐 Payment redirected to Stripe');
-                } else {
-                  // For native, payment is handled in browser
-                  console.log('📱 Payment redirected to browser');
-                }
-              } else if (paymentResult.pending) {
-                // Native app - payment is being handled externally
-                console.log('📱 Payment pending in browser');
-              }
-            } catch (error) {
-              setSelectedPlan(null);
-              Alert.alert(
-                'Payment Error',
-                error.message || 'Payment could not be processed. Please try again.'
-              );
-            }
-          },
-        },
-      ]
-    );
+    try {
+      await handlePayment(planId, price, billingCycle);
+    } catch (error) {
+      setSelectedPlan(null);
+      // Error already handled in handlePayment
+      console.log('error occur during handle select plan:', error);
+    }
   };
 
   // Rest of your component rendering code remains the same...
@@ -734,8 +655,15 @@ export default function PricingScreen({ navigation, route }) {
           </View>
         </View>
       )}
+
+            {/* Status Message */}
+      {processingMessage && (
+        <View style={styles.statusBar}>
+          <Text style={styles.statusText}>{processingMessage}</Text>
+        </View>
+      )}
       
-      {/* Header - Only show on web or when there's navigation */}
+      {/* Header */}
       {(Platform.OS === 'web' || navigation?.goBack) && (
         <View style={styles.header}>
           {navigation?.goBack && (
@@ -743,10 +671,14 @@ export default function PricingScreen({ navigation, route }) {
               <ArrowLeft size={24} color="#000" />
             </TouchableOpacity>
           )}
-          <Text style={styles.headerTitle}>Choose Your Plan</Text>
+          <Text style={styles.headerTitle}>
+            {isFirstLogin ? 'Welcome! Choose Your Plan' : 'Choose Your Plan'}
+          </Text>
           <View style={{ width: 40 }} />
         </View>
       )}
+
+
 
       <ScrollView
         contentContainerStyle={[styles.content, { paddingHorizontal: horizontalPadding }]}
@@ -754,9 +686,14 @@ export default function PricingScreen({ navigation, route }) {
       >
         {/* Hero Section */}
         <View style={styles.heroSection}>
-          <Text style={styles.title}>Unlock Your Potential</Text>
+          <Text style={styles.title}>
+            {isFirstLogin ? 'Welcome to SuperEngineer!' : 'Unlock Your Potential'}
+          </Text>
           <Text style={styles.subtitle}>
-            Choose the perfect plan for your engineering needs and start building amazing things today.
+            {isFirstLogin 
+              ? 'Choose your plan to get started with AI-powered engineering assistance.'
+              : 'Choose the perfect plan for your engineering needs and start building amazing things today.'
+            }
           </Text>
         </View>
 

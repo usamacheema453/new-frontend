@@ -14,12 +14,14 @@ import {
   KeyboardAvoidingView,
   Image,
 } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation,useRoute } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Shield, Mail, Phone } from 'lucide-react-native';
 
 console.log('🚀 Setup2FAPage rendered');
+
+const BACKEND_URL= "http://localhost:8000"
 
 export default function Setup2FAPage() {
   const [contactMethod, setContactMethod] = useState('email');
@@ -27,31 +29,26 @@ export default function Setup2FAPage() {
   const [phone, setPhone] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const navigation = useNavigation();
+  const route = useRoute();
 
   useEffect(() => {
     (async () => {
-      const storedEmail = await AsyncStorage.getItem('userEmail');
-      if (storedEmail) setEmail(storedEmail);
+      try {
+        // ✅ Get email with multiple fallbacks
+        let storedEmail = route?.params?.userEmail || 
+          await AsyncStorage.getItem('signupUserEmail') || 
+          await AsyncStorage.getItem('userEmail') || '';
+        
+        if (storedEmail) {
+          setEmail(storedEmail);
+        }
+      } catch (error) {
+        console.error('Error loading email in Setup2FA:', error);
+      }
     })();
-  }, []);
+  }, [route?.params]);
 
-  const loadUserEmail = async()=>{
-    try{ 
-      const routeEmail = route?.params?.userEmail;
-      if(routeEmail){
-        setEmail(routeEmail);
-      }else{
-        // Fallback to stored email
-      const storedEmail = await AsyncStorage.getItem('signupUserEmail') || 
-                          await AsyncStorage.getItem('userEmail');
-      if (storedEmail) {
-        setEmail(storedEmail);
-      }
-      }
-    }catch(error){
-      console.error('Error loading user email:', error);
-    }
-  }
+
 
   const handleSetup2FA = async () => {
     
@@ -69,12 +66,22 @@ export default function Setup2FAPage() {
 
     setIsLoading(true);
     try{
+            // ✅ Get user email with multiple fallbacks
+      let userEmail = route?.params?.userEmail || 
+          await AsyncStorage.getItem('signupUserEmail') || 
+          await AsyncStorage.getItem('userEmail');
+
+      if (!userEmail) {
+        console.error('User email not found. Please try signing up again.')
+        navigation.navigate('Signup');
+        return;
+      }
+      
       await AsyncStorage.setItem('2faMethod', contactMethod);
       await AsyncStorage.setItem('2faContact', contactMethod === 'email'? email: phone);
 
-          // Send OTP to chosen method
-      const userEmail = route?.params?.userEmail || await AsyncStorage.getItem('signupUserEmail');
-      const response = await fetch(`${API_BASE_URL}/auth/send-2fa-otp`, {
+
+      const response = await fetch(`${BACKEND_URL}/auth/send-2fa-otp`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -100,7 +107,7 @@ export default function Setup2FAPage() {
     }catch(error){
       console.error('2FA setup error:', error);
     }finally{
-      setIsLoading(true);
+      setIsLoading(false);
     }
   };
 

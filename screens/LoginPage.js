@@ -27,12 +27,10 @@ export default function LoginPage() {
   const [formData, setFormData] = useState({
     email: '',
     password: '',
-    otp_token: '',
   });
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const navigation = useNavigation();
-  const [requiresOTP, setRequiresOTP] = useState(false);
 
   const handleInputChange = (field, value) => {
     setFormData((prev) => ({
@@ -40,14 +38,68 @@ export default function LoginPage() {
       [field]: value,
     }));
   };
-  const handleLogin = async () => {
 
+  // ✅ Check subscription status and navigate accordingly
+  const checkSubscriptionAndNavigate = async (userData) => {
+    try {
+      console.log('📋 Checking subscription status for:', userData.user.email);
+      
+      const response = await fetch(`${BACKEND_URL}/subscriptions/current/${userData.user.email}`);
+      const subscriptionData = await response.json();
+      
+      console.log('📋 Subscription data:', subscriptionData);
+      
+      if (subscriptionData.has_subscription) {
+        // User has active subscription - go to main app
+        await AsyncStorage.setItem('userPlan', subscriptionData.plan);
+        navigation.reset({
+          index: 0,
+          routes: [{ name: 'Chat' }],
+        });
+      } else {
+        // No subscription - show pricing screen
+        await AsyncStorage.setItem('userPlan', 'none');
+        navigation.reset({
+          index: 0,
+          routes: [{
+            name: 'Pricing',
+            params: {
+              isFirstLogin: false,
+              requiresPlanSelection: subscriptionData.requires_plan_selection,
+              message: subscriptionData.message,
+              userEmail: userData.user.email,
+              userName: userData.user.full_name
+            }
+          }],
+        });
+      }
+    } catch (error) {
+      console.error('❌ Error checking subscription:', error);
+      // Fallback to pricing screen
+      navigation.reset({
+        index: 0,
+        routes: [{
+          name: 'Pricing',
+          params: {
+            isFirstLogin: false,
+            userEmail: userData.user.email,
+            userName: userData.user.full_name
+          }
+        }],
+      });
+    }
+  };
+
+
+
+
+  const handleLogin = async () => {
     setIsLoading(true);
-    try{
-      const response = await fetch(`${BACKEND_URL}/auth/login`,{
+    try {
+      const response = await fetch(`${BACKEND_URL}/auth/login`, {
         method: 'POST',
-        headers:{
-            'Content-Type': 'application/json',
+        headers: {
+          'Content-Type': 'application/json',
         },
         body: JSON.stringify({
           email: formData.email,
@@ -57,86 +109,83 @@ export default function LoginPage() {
 
       const data = await response.json();
 
-      if(!response.ok){
-        throw new Error(data.detail | 'Login failed');
+      if (!response.ok) {
+        throw new Error(data.detail || 'Login failed');
       }
 
-      if(data.requires_2fa){
+      if (data.requires_2fa) {
         setIsLoading(false);
-
         await AsyncStorage.setItem('loginUserEmail', formData.email);
 
         navigation.navigate('TwoFactor', {
-            isSignupFlow: false,
-            isLoginFlow: true,
-            userEmail: formData.email,
-            method: data.auth_method,
-            contact: data.contact
+          isSignupFlow: false,
+          isLoginFlow: true,
+          userEmail: formData.email,
+          method: data.auth_method,
+          contact: data.contact
         });
         return;
       }
-      
+
+      // ✅ Handle login success with first-time login detection
       await completeLogin(data);
-    }catch(error){
-      console.error('Login error:', error);
-      Alert.alert('Error', error.message || 'An error occurred during login. Please try again.');
+      
+    } catch (error) {
+      console.error('❌ Login error:', error);
       setIsLoading(false);
+      // You can implement toast notification here instead of Alert.alert
+      console.error('Login failed:', error.message);
     }
   };
 
-  const completeLogin = async(userData)=>{
-    try{
-         // Store authentication data
-        await AsyncStorage.setItem('accessToken', userData.access_token);
-        await AsyncStorage.setItem('refreshToken', userData.refresh_token);
-        await AsyncStorage.setItem('userEmail', userData.user.email);
-        await AsyncStorage.setItem('userName', userData.user.full_name);
-        await AsyncStorage.setItem('userId', userData.user.id.toString());
-        await AsyncStorage.setItem('has2FA', userData.user.is_2fa_enabled ? 'true' : 'false');
-        await AsyncStorage.setItem('isAuthenticated', 'true');
 
-        try{
-          const subResponse = await fetch(`${BACKEND_URL}/subscriptions/current/${userData.user.email}`);
-          if(subResponse.ok){
-            const subData = await subResponse.json();
-            await AsyncStorage.setItem('userPlan', subData.plan);
-          }
-        }catch(error){
-            console.warn('Failed to load subscription:', error);
-            await AsyncStorage.setItem('userPlan', 'free');
-        }
 
-        setIsLoading(false);
+  const completeLogin = async (userData) => {
+    try {
+      // Store authentication data
+      await AsyncStorage.setItem('accessToken', userData.access_token);
+      await AsyncStorage.setItem('refreshToken', userData.refresh_token);
+      await AsyncStorage.setItem('userEmail', userData.user.email);
+      await AsyncStorage.setItem('userName', userData.user.full_name);
+      await AsyncStorage.setItem('userId', userData.user.id.toString());
+      await AsyncStorage.setItem('has2FA', userData.user.is_2fa_enabled ? 'true' : 'false');
+      await AsyncStorage.setItem('isAuthenticated', 'true');
+
+      setIsLoading(false);
+
+      // ✅ Check if this is first-time login
+      if (userData.is_first_login) {
+        console.log('🆕 First-time login detected');
         
-        // Check if user has a paid plan
-        const userPlan = await AsyncStorage.getItem('userPlan') || 'free';
+        navigation.reset({
+          index: 0,
+          routes: [{
+            name: 'Pricing',
+            params: {
+              isFirstLogin: true,
+              userEmail: userData.user.email,
+              userName: userData.user.full_name,
+              loginCount: userData.login_count
+            }
+          }],
+        });
+      } else {
+        console.log('🔄 Returning user login');
+        
+        // Check subscription status for returning users
+        await checkSubscriptionAndNavigate(userData);
+      }
 
-        if(userPlan === "free"){
-          navigation.reset({
-            index: 0,
-            routes: [{
-              name: 'Pricing',
-              params:{
-                isFirstLogin: true,
-                userEmail: userData.user.email,
-                userName: userData.user.full_name
-              }
-            }],
-          });
-        }else{
-          navigation.reset({
-            index: 0,
-            routes:[{
-              name: 'Chat'
-            }],
-          });
-        }
-    }catch(error){
-        console.error('Error completing login:', error);
-        Alert.alert('Error', 'Failed to complete login. Please try again.');
-        setIsLoading(false);
+    } catch (error) {
+      console.error('❌ Error completing login:', error);
+      setIsLoading(false);
+      console.error('Failed to complete login. Please try again.');
     }
-  }
+  };
+
+
+
+
   const handleGoogleLogin = async () => {
     // const googleEmail = 'admin@gmail.com';
     // await AsyncStorage.setItem('userEmail', googleEmail);

@@ -1,7 +1,7 @@
 // components/UpgradePrompt.js
 // CLEAN VERSION - Consistent with PricingScreen design
 
-import React from 'react';
+import React, {useState} from 'react';
 import {
   View,
   Text,
@@ -31,6 +31,13 @@ import {
   getNextPlan,
   hasFeatureAccess,
 } from '../utils/planAccessManager';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import CustomPopup from './CustomPopup';
+import PaymentMethodPopup from './PaymentMethodPopup';
+
+const API_BASE_URL = __DEV__ 
+  ? "http://localhost:8000" 
+  : "https://your-production-api.com";
 
 export default function UpgradePrompt({
   visible,
@@ -45,6 +52,12 @@ export default function UpgradePrompt({
   const { width, height } = useWindowDimensions();
   const screenData = Dimensions.get('screen');
   const isWide = width >= 768;
+
+  // Add state variables
+  const [showCustomPopup, setShowCustomPopup] = useState(false);
+  const [popupConfig, setPopupConfig] = useState({});
+  const [showPaymentPopup, setShowPaymentPopup] = useState(false);
+  const [paymentPopupData, setPaymentPopupData] = useState({});
 
   if (!visible) {
     return null;
@@ -169,10 +182,142 @@ export default function UpgradePrompt({
     ? promptContent.highlightFeatures 
     : newFeatures.slice(0, 5);
 
-  const handleUpgrade = (planId = promptContent.targetPlan) => {
-    onUpgrade?.(planId);
-    onClose();
-  };
+// Replace the handleUpgrade function
+const handleUpgrade = async (planId = promptContent.targetPlan) => {
+  try {
+    const userEmail = await AsyncStorage.getItem('userEmail');
+    if (!userEmail) {
+      setPopupConfig({
+        title: 'Authentication Error',
+        message: 'Please log in again to continue',
+        type: 'error',
+        buttons: [{ text: 'OK', style: 'primary' }]
+      });
+      setShowCustomPopup(true);
+      return;
+    }
+
+    const planMapping = { 'solo': 2, 'team': 3, 'enterprise': 4 };
+    const backendPlanId = planMapping[planId];
+    
+    if (!backendPlanId) {
+      console.error('Invalid plan ID:', planId);
+      return;
+    }
+
+    // For enterprise, show contact popup
+    if (planId === 'enterprise') {
+      setPopupConfig({
+        title: 'Enterprise Plan',
+        message: 'Contact our sales team for custom pricing and enterprise features',
+        type: 'payment',
+        buttons: [
+          { text: 'Cancel', style: 'default' },
+          { 
+            text: 'Contact Sales', 
+            style: 'primary',
+            onPress: () => {
+              const emailUrl = 'mailto:sales@superengineer.com?subject=Enterprise Plan Inquiry';
+              Linking.openURL(emailUrl).catch(() => {
+                console.log('Could not open email client');
+              });
+            }
+          }
+        ]
+      });
+      setShowCustomPopup(true);
+      onClose();
+      return;
+    }
+
+    // Check for saved payment methods
+    const savedMethodsResponse = await fetch(`${API_BASE_URL}/payment-methods/`, {
+      headers: {
+        'Authorization': `Bearer ${await AsyncStorage.getItem('accessToken')}`
+      }
+    });
+
+    let savedMethods = [];
+    if (savedMethodsResponse.ok) {
+      savedMethods = await savedMethodsResponse.json();
+    }
+
+    const planInfo = PLAN_INFO[planId];
+    const price = '£10/month'; // You can make this dynamic
+
+    if (savedMethods.length > 0) {
+      // Show payment method selection popup
+      setPaymentPopupData({
+        planName: planInfo?.displayName || planId,
+        price: price,
+        savedMethods: savedMethods,
+        planId: planId,
+        backendPlanId: backendPlanId
+      });
+      setShowPaymentPopup(true);
+    } else {
+      // No saved methods, create checkout session directly
+      await createNewCheckoutSession(backendPlanId, 'monthly', userEmail);
+    }
+
+  } catch (error) {
+    console.error('Upgrade error:', error);
+    setPopupConfig({
+      title: 'Error',
+      message: 'Failed to process upgrade. Please try again.',
+      type: 'error',
+      buttons: [{ text: 'OK', style: 'primary' }]
+    });
+    setShowCustomPopup(true);
+  }
+};
+
+// Update charge function
+const chargeWithSavedMethod = async (planId, billingCycle, userEmail, paymentMethod) => {
+  try {
+    const token = await AsyncStorage.getItem('accessToken');
+    const response = await fetch(`${API_BASE_URL}/payment-methods/charge-saved`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        plan_id: planId,
+        billing_cycle: billingCycle,
+        payment_method_id: paymentMethod.id
+      })
+    });
+
+    const result = await response.json();
+
+    if (response.ok && result.success) {
+      setPopupConfig({
+        title: 'Success!',
+        message: `${result.plan_name} plan activated successfully!`,
+        type: 'success',
+        buttons: [{ 
+          text: 'Continue', 
+          style: 'primary',
+          onPress: () => onUpgrade?.(planId)
+        }]
+      });
+      setShowCustomPopup(true);
+      onClose();
+    } else {
+      throw new Error(result.detail || 'Payment failed');
+    }
+  } catch (error) {
+    console.error('Saved payment method charge error:', error);
+    setPopupConfig({
+      title: 'Payment Failed',
+      message: error.message || 'Please try again or use a different payment method.',
+      type: 'error',
+      buttons: [{ text: 'OK', style: 'primary' }]
+    });
+    setShowCustomPopup(true);
+  }
+};
 
   const renderFeatureList = () => {
     return displayFeatures.map((featureKey) => {
@@ -463,6 +608,37 @@ export default function UpgradePrompt({
           )}
         </View>
       </View>
+
+          {/* Custom Popup */}
+    <CustomPopup
+      visible={showCustomPopup}
+      onClose={() => setShowCustomPopup(false)}
+      {...popupConfig}
+    />
+    {/* Payment Method Selection Popup */}
+    <PaymentMethodPopup
+      visible={showPaymentPopup}
+      onClose={() => setShowPaymentPopup(false)}
+      planName={paymentPopupData.planName}
+      price={paymentPopupData.price}
+      savedMethods={paymentPopupData.savedMethods}
+      onUseSavedCard={(method) => {
+        chargeWithSavedMethod(
+          paymentPopupData.backendPlanId, 
+          'monthly', 
+          null, 
+          method
+        );
+      }}
+      onAddNewCard={() => {
+        createNewCheckoutSession(
+          paymentPopupData.backendPlanId, 
+          'monthly', 
+          null
+        );
+      }}
+    />
+
     </Modal>
   );
 }
