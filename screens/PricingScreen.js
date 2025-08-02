@@ -30,6 +30,8 @@ import {
 } from 'lucide-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import CustomPopup from '../components/CustomPopup';
+import PaymentMethodPopup from '../components/PaymentMethodPopup';
 
 // ✅ API Configuration for Expo
 const API_BASE_URL = __DEV__ 
@@ -51,6 +53,21 @@ export default function PricingScreen({ navigation, route }) {
   const isSignupFlow = route?.params?.isSignupFlow || false;
   const isFirstLogin = route?.params?.isFirstLogin || false;
 
+  const [showCustomPopup, setShowCustomPopup] = useState(false);
+  const [popupConfig, setPopupConfig] = useState({});
+  const [showPaymentPopup, setShowPaymentPopup] = useState(false);
+  const [paymentPopupData, setPaymentPopupData] = useState({});
+
+  // Replace showStatus function
+  const showCustomStatus = (title, message, type = 'info') => {
+    setPopupConfig({
+      title,
+      message,
+      type,
+      buttons: [{ text: 'OK', style: 'primary' }]
+    });
+    setShowCustomPopup(true);
+  };
   
   // ✅ API Service
   const apiService = {
@@ -503,6 +520,8 @@ export default function PricingScreen({ navigation, route }) {
 
     console.log('🎯 Plan selected:', planId);
 
+    
+
     // ✅ Handle Free plan - Direct execution
     if (planId === 'free') {
       setSelectedPlan(planId);
@@ -588,15 +607,53 @@ export default function PricingScreen({ navigation, route }) {
     const price = isYearly ? plan.yearlyPrice : plan.monthlyPrice;
     const billingCycle = isYearly ? 'year' : 'month';
 
+    if(planId !== 'free' && planId !== 'enterprise'){
+      setSelectedPlan(planId);
+
+      try{
+                const token = await AsyncStorage.getItem('accessToken');
+
+        if(token){
+          const savedMethodsResponse = await fetch(`${API_BASE_URL}/payment-methods/`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+          });
+
+          if(savedMethodsResponse.ok){
+            const methods = await savedMethodsResponse.json();
+
+            if(methods.length > 0){
+                setPaymentPopupData({
+                  planName: plan.name,
+                  price: `£${price}/${billingCycle}`,
+                  savedMethods: methods,
+                  planId: planId,
+                  backendPlanId: plan.backendId,
+                  billingCycle: billingCycle
+                });
+              setShowPaymentPopup(true);
+              setSelectedPlan(null);
+              return;
+            }
+          }
+
+        }
+        await handlePaymentWithSaving(planId, price, billingCycle);
+
+      }catch(error){
+        console.error('Error checking payment methods:', error);
+        await handlePayment(planId, price, billingCycle);
+      }
+    }
+
     console.log(`Processing payment for ${plan.name} plan: £${price}/${billingCycle}`);
 
-    try {
-      await handlePayment(planId, price, billingCycle);
-    } catch (error) {
-      setSelectedPlan(null);
-      // Error already handled in handlePayment
-      console.log('error occur during handle select plan:', error);
-    }
+    // try {
+    //   await handlePayment(planId, price, billingCycle);
+    // } catch (error) {
+    //   setSelectedPlan(null);
+    //   // Error already handled in handlePayment
+    //   console.log('error occur during handle select plan:', error);
+    // }
   };
 
   // Rest of your component rendering code remains the same...
@@ -852,6 +909,32 @@ export default function PricingScreen({ navigation, route }) {
         {/* Bottom spacing */}
         <View style={{ height: isNative ? 20 : 40 }} />
       </ScrollView>
+
+      <CustomPopup
+        visible={showCustomPopup}
+        onClose={()=> setShowCustomPopup(false)}
+        {...popupConfig}
+      />
+
+          <PaymentMethodPopup
+                visible={showPaymentPopup}
+                onClose={() => setShowPaymentPopup(false)}
+                {...paymentPopupData}
+                onUseSavedCard={(method) => {
+                  chargeWithSavedMethod(
+                    paymentPopupData.backendPlanId, 
+                    paymentPopupData.billingCycle,
+                    method
+                  );
+                }}
+                onAddNewCard={() => {
+                  handlePaymentWithSaving(
+                    paymentPopupData.planId, 
+                    paymentPopupData.price, 
+                    paymentPopupData.billingCycle
+                  );
+                }}
+          />
     </SafeAreaView>
   );
 }
